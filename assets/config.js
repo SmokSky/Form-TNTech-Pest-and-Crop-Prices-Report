@@ -1,0 +1,9 @@
+/**
+ * Điền WEB_APP_URL và SUBMIT_TOKEN sau khi deploy Apps Script.
+ * Repo public: không commit giá trị thật — dùng bí mật CI hoặc chỉnh cục bộ.
+ */
+window.PEST_REPORT_CONFIG = {
+  WEB_APP_URL: '',
+  SUBMIT_TOKEN: '',
+  GOOGLE_CLIENT_ID: '132295089348-1u8mqnovhiudl18mv1tm5lvfq6rhe45c.apps.googleusercontent.com'
+};
