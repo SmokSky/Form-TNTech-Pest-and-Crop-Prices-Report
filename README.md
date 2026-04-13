@@ -21,7 +21,7 @@ Mở `http://localhost:8080`.
 
 Tham chiếu mẫu: [assets/config.example.js](assets/config.example.js).
 
-**Lưu ý:** Hàng tiêu đề Sheet mới gồm `timestamp`, `khu_vuc`, `reporter_email`, `reporter_name`, `report_json`. Nếu đang dùng bảng 4 cột cũ (có `truong_khu_vuc`), tạo tab mới hoặc cập nhật tiêu đề cho khớp [gas/Code.gs](gas/Code.gs).
+**Lưu ý:** Hàng tiêu đề Sheet là bộ cột tiếng Việt (~15 cột, có cột JSON cuối) trong `FLAT_REPORT_HEADERS` — xem [docs/COLUMN_SCHEMA.md](docs/COLUMN_SCHEMA.md) và [gas/Code.gs](gas/Code.gs). Nếu đang dùng bảng cũ (**A1 = `timestamp`** hoặc cột `truong_khu_vuc`), script có thể ghi tiêu đề mới khi điều kiện nâng cấp được thỏa; nếu không, tạo tab mới hoặc chỉnh tay cho khớp.
 
 ## Tài liệu
 
