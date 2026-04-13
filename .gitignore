@@ -4,3 +4,5 @@
 # Tùy chọn: không theo dõi file chứa token thật (bỏ comment nếu cần)
 # assets/config.js
 /secrets/*
+/gas/*
+/docs/*
