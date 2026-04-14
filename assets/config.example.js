@@ -9,5 +9,6 @@
 window.PEST_REPORT_CONFIG = {
   WEB_APP_URL: 'https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec',
   SUBMIT_TOKEN: 'your-secret-token-matching-script-properties',
-  GOOGLE_CLIENT_ID: 'YOUR_CLIENT_ID.apps.googleusercontent.com'
+  GOOGLE_CLIENT_ID: 'YOUR_CLIENT_ID.apps.googleusercontent.com',
+  WP_BASE_URL: 'https://web.tinnongtntech.com'
 };

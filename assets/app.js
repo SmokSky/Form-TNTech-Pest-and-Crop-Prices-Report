@@ -359,6 +359,11 @@
     farmers: [emptyFarmersRow()],
     prices_by_group: emptyPricesByGroup(),
     extra_crop_detail: '',
+    media_links_text: '',
+    media_uploading: false,
+    media_upload_jobs: [],
+    media_upload_error: '',
+    media_upload_files: [],
     submitting: false,
     error: '',
     success: false
@@ -491,6 +496,7 @@
     state.prices_by_group = emptyPricesByGroup();
     state.selected_groups = { lua: true, rau_hoa: true, cay_an_trai: true };
     state.extra_crop_detail = '';
+    state.media_links_text = '';
     state.submitting = false;
     state.error = '';
   }
@@ -526,6 +532,199 @@
   function num(v) {
     var n = parseFloat(String(v).replace(',', '.'));
     return isNaN(n) ? 0 : n;
+  }
+
+  var MAX_MEDIA_LINKS = 10;
+
+  function parseMediaLinkLines(text) {
+    return String(text || '')
+      .split(/\r?\n/)
+      .map(function (s) {
+        return s.trim();
+      })
+      .filter(Boolean);
+  }
+
+  function isValidHttpUrl(s) {
+    try {
+      var u = new URL(s);
+      return u.protocol === 'http:' || u.protocol === 'https:';
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function validateMediaLinksText(text) {
+    var lines = parseMediaLinkLines(text);
+    if (lines.length > MAX_MEDIA_LINKS)
+      return 'Link ảnh/video: tối đa ' + MAX_MEDIA_LINKS + ' dòng.';
+    for (var i = 0; i < lines.length; i++) {
+      if (!isValidHttpUrl(lines[i]))
+        return 'Link ảnh/video — dòng ' + (i + 1) + ' không phải URL hợp lệ (chỉ http hoặc https).';
+    }
+    return '';
+  }
+
+  function wpBaseUrl() {
+    var b = (cfg().WP_BASE_URL || 'https://web.tinnongtntech.com').trim();
+    return b.replace(/\/+$/, '');
+  }
+
+  function fetchWpNonce() {
+    var url = wpBaseUrl() + '/wp-json/tntech/v1/nonce';
+    return fetch(url, { method: 'GET' })
+      .then(function (r) {
+        return r
+          .text()
+          .then(function (t) {
+            var j = {};
+            try {
+              j = JSON.parse(t);
+            } catch (e) {
+              throw new Error('Không đọc được nonce từ máy chủ.');
+            }
+            if (!j || !j.nonce) throw new Error('Thiếu nonce từ máy chủ.');
+            return j.nonce;
+          })
+          .catch(function () {
+            throw new Error('Không đọc được nonce từ máy chủ.');
+          });
+      })
+      .catch(function (e) {
+        if (e && (e.name === 'TypeError' || /Failed to fetch/i.test(e.message || ''))) {
+          throw new Error(
+            'Không kết nối được máy chủ upload (có thể do CORS hoặc mạng). Nếu dùng GitHub Pages, cần bật CORS ở WordPress cho domain của bạn.'
+          );
+        }
+        throw e;
+      });
+  }
+
+  function uploadSingleFileToWp(file, email, nonce) {
+    var url = wpBaseUrl() + '/wp-json/tntech/v1/marketing/upload';
+    var fd = new FormData();
+    fd.append('email', email);
+    fd.append('file', file, file && file.name ? file.name : 'upload.bin');
+    return fetch(url, { method: 'POST', headers: { 'X-WP-Nonce': nonce }, body: fd })
+      .then(function (r) {
+        return r.text().then(function (t) {
+          var j = {};
+          try {
+            j = JSON.parse(t);
+          } catch (e) {
+            throw new Error('Phản hồi upload không hợp lệ.');
+          }
+          if (!j.success) {
+            var code = (j && j.code) || (j && j.data && j.data.code) || '';
+            if (code === 'tntech_missing_nonce') throw new Error('Thiếu nonce upload.');
+            if (code === 'tntech_invalid_nonce') throw new Error('Nonce upload không hợp lệ hoặc đã hết hạn.');
+            if (code === 'tntech_invalid_email') throw new Error('Email không hợp lệ.');
+            if (code === 'tntech_missing_file') throw new Error('Thiếu file upload.');
+            if (code === 'tntech_invalid_mime') throw new Error('Định dạng file không hỗ trợ.');
+            if (code === 'tntech_file_too_large') throw new Error('File quá dung lượng cho phép.');
+            if (code === 'tntech_rate_limited') throw new Error('Upload quá nhiều lần — vui lòng thử lại sau.');
+            throw new Error((j && (j.message || j.error)) || 'Upload thất bại.');
+          }
+          var files = Array.isArray(j.files) ? j.files : [];
+          var f0 = files[0] || null;
+          if (!f0 || !f0.url) throw new Error('Upload thành công nhưng thiếu URL file.');
+          return f0.url;
+        });
+      })
+      .catch(function (e) {
+        if (e && (e.name === 'TypeError' || /Failed to fetch/i.test(e.message || ''))) {
+          throw new Error(
+            'Upload bị chặn (có thể do CORS hoặc mạng). Nếu dùng GitHub Pages, cần bật CORS ở WordPress cho domain của bạn.'
+          );
+        }
+        throw e;
+      });
+  }
+
+  function appendUploadedUrls(urls) {
+    var cur = parseMediaLinkLines(state.media_links_text);
+    var out = cur.slice(0);
+    for (var i = 0; i < urls.length; i++) {
+      if (out.length >= MAX_MEDIA_LINKS) break;
+      if (isValidHttpUrl(urls[i])) out.push(urls[i]);
+    }
+    state.media_links_text = out.join('\n');
+  }
+
+  function startMediaUpload() {
+    if (state.media_uploading) return;
+    if (!state.reporter || !state.reporter.email) {
+      state.media_upload_error = 'Cần đăng nhập để upload (thiếu email).';
+      render();
+      return;
+    }
+    var files = state.media_upload_files || [];
+    if (!files.length) {
+      state.media_upload_error = 'Chọn ít nhất một file để upload.';
+      render();
+      return;
+    }
+    if (parseMediaLinkLines(state.media_links_text).length >= MAX_MEDIA_LINKS) {
+      state.media_upload_error = 'Đã đủ ' + MAX_MEDIA_LINKS + ' link — không thể thêm.';
+      render();
+      return;
+    }
+
+    state.media_upload_error = '';
+    state.media_uploading = true;
+    state.media_upload_jobs = (state.media_upload_jobs || []).map(function (j) {
+      return j && j.status === 'done' ? j : Object.assign({}, j, { status: 'uploading', error: '' });
+    });
+    render();
+
+    fetchWpNonce()
+      .then(function (nonce) {
+        var uploaded = [];
+        var i = 0;
+        function step() {
+          if (i >= files.length) return Promise.resolve();
+          var f = files[i];
+          var jobIdx = i;
+          state.media_upload_jobs[jobIdx] = state.media_upload_jobs[jobIdx] || {
+            name: f && f.name ? f.name : 'file_' + (i + 1),
+            size: f && typeof f.size === 'number' ? f.size : 0,
+            status: 'uploading',
+            url: '',
+            error: ''
+          };
+          state.media_upload_jobs[jobIdx].status = 'uploading';
+          state.media_upload_jobs[jobIdx].error = '';
+          render();
+          return uploadSingleFileToWp(f, state.reporter.email, nonce)
+            .then(function (url) {
+              state.media_upload_jobs[jobIdx].status = 'done';
+              state.media_upload_jobs[jobIdx].url = url;
+              uploaded.push(url);
+              appendUploadedUrls([url]);
+              render();
+            })
+            .catch(function (e) {
+              state.media_upload_jobs[jobIdx].status = 'error';
+              state.media_upload_jobs[jobIdx].error = (e && e.message) || 'Upload thất bại.';
+              render();
+            })
+            .then(function () {
+              i += 1;
+              if (parseMediaLinkLines(state.media_links_text).length >= MAX_MEDIA_LINKS) return;
+              return step();
+            });
+        }
+        return step();
+      })
+      .then(function () {
+        state.media_uploading = false;
+        render();
+      })
+      .catch(function (e) {
+        state.media_uploading = false;
+        state.media_upload_error = (e && e.message) || 'Lỗi upload.';
+        render();
+      });
   }
 
   function ensurePriceGroup(grp) {
@@ -739,6 +938,10 @@
       return 'Thêm ít nhất một loại rau hoặc hoa.';
     if (fid === 'trai' && state.selected_groups.cay_an_trai && state.trai_entries.length === 0)
       return 'Thêm ít nhất một loại cây ăn trái.';
+    if (fid === 'extra_detail') {
+      var mErr = validateMediaLinksText(state.media_links_text);
+      if (mErr) return mErr;
+    }
     return '';
   }
 
@@ -750,6 +953,8 @@
     if (sg.lua && state.lua_entries.length === 0) return 'Nhóm lúa: thêm ít nhất một giống/loại lúa.';
     if (sg.rau_hoa && state.rau_entries.length === 0) return 'Rau & hoa: thêm ít nhất một loại cây.';
     if (sg.cay_an_trai && state.trai_entries.length === 0) return 'Cây ăn trái: thêm ít nhất một loại cây.';
+    var mediaErr = validateMediaLinksText(state.media_links_text);
+    if (mediaErr) return mediaErr;
     return '';
   }
 
@@ -826,7 +1031,7 @@
     var reg = getRegion();
     var rep = state.reporter;
     return {
-      version: 8,
+      version: 9,
       region_id: state.region_id,
       khu_vuc_label: reg ? reg.label : '',
       selected_groups: {
@@ -890,7 +1095,8 @@
           })
         }
       },
-      chi_tiet_bo_sung: state.extra_crop_detail.trim()
+      chi_tiet_bo_sung: state.extra_crop_detail.trim(),
+      media_links: parseMediaLinkLines(state.media_links_text)
     };
   }
 
@@ -1173,16 +1379,80 @@
   }
 
   function renderStepExtraDetail() {
+    var jobs = state.media_upload_jobs || [];
+    var jobsHtml =
+      jobs.length === 0
+        ? '<p class="text-xs text-slate-500">Chưa chọn file.</p>'
+        : '<ul class="mt-2 space-y-2">' +
+          jobs
+            .map(function (j) {
+              var st =
+                j.status === 'done'
+                  ? '<span class="text-emerald-700 font-medium">Đã upload</span>'
+                  : j.status === 'error'
+                    ? '<span class="text-red-600 font-medium">Lỗi</span>'
+                    : '<span class="text-slate-600 font-medium">Đang upload…</span>';
+              var sub = j.url
+                ? '<div class="text-xs text-slate-600 break-all mt-1">' + escapeHtml(j.url) + '</div>'
+                : j.error
+                  ? '<div class="text-xs text-red-700 mt-1">' + escapeHtml(j.error) + '</div>'
+                  : '';
+              return (
+                '<li class="rounded-xl border border-slate-200 bg-white px-3 py-2">' +
+                '<div class="flex items-start justify-between gap-2">' +
+                '<div class="min-w-0 flex-1">' +
+                '<div class="text-sm font-medium text-slate-900 truncate">' +
+                escapeHtml(j.name || 'File') +
+                '</div>' +
+                sub +
+                '</div>' +
+                '<div class="shrink-0 text-xs">' +
+                st +
+                '</div>' +
+                '</div>' +
+                '</li>'
+              );
+            })
+            .join('') +
+          '</ul>';
+    var upErr = state.media_upload_error
+      ? '<div class="mt-2 rounded-xl bg-red-50 border border-red-200 text-red-800 px-3 py-2 text-xs">' +
+        escapeHtml(state.media_upload_error) +
+        '</div>'
+      : '';
+    var upDisabled = state.submitting || state.media_uploading ? 'disabled' : '';
     return (
       '<div class="space-y-3">' +
       '<div class="rounded-2xl border border-indigo-200 bg-indigo-50/50 p-4">' +
       '<p class="font-semibold text-indigo-900">Chi tiết bổ sung</p>' +
       '<p class="text-sm text-slate-600 mt-1">Ghi thêm dịch hại, giá hoặc nhận xét cho <strong>các nhóm chưa nhập đủ</strong> ở trên, hoặc bất kỳ nhóm cây trồng khác.</p>' +
       '</div>' +
+      '<div class="rounded-2xl border border-slate-200 bg-white p-4 space-y-2">' +
+      '<p class="text-sm font-medium text-slate-800">Upload ảnh / video (không bắt buộc)</p>' +
+      '<p class="text-xs text-slate-600 leading-relaxed">Chọn file từ điện thoại/máy tính để upload lên máy chủ. Sau khi upload xong, link sẽ tự điền vào ô &quot;Link ảnh / video&quot; bên dưới.</p>' +
+      '<input type="file" id="media_upload" class="w-full text-sm" accept="image/*,video/*" multiple ' +
+      upDisabled +
+      ' />' +
+      '<button type="button" id="btn-media-upload" class="mt-2 w-full min-h-[48px] rounded-xl bg-indigo-600 text-white font-medium disabled:opacity-50" ' +
+      upDisabled +
+      '>' +
+      (state.media_uploading ? 'Đang upload…' : 'Upload') +
+      '</button>' +
+      upErr +
+      jobsHtml +
+      '</div>' +
       '<label class="text-sm font-medium text-slate-800">Nội dung (không bắt buộc)</label>' +
       '<textarea id="extra_crop_detail" rows="6" class="w-full rounded-xl border border-slate-300 px-3 py-3 text-base" placeholder="Ví dụ: thêm tình hình nhóm rau nếu trước đó chỉ chọn lúa; hoặc ghi giá/mức dịch theo tỉnh láng giềng…">' +
       escapeHtml(state.extra_crop_detail) +
-      '</textarea></div>'
+      '</textarea>' +
+      '<div class="rounded-2xl border border-slate-200 bg-white p-4 mt-4 space-y-2">' +
+      '<p class="text-sm font-medium text-slate-800">Link ảnh / video (không bắt buộc)</p>' +
+      '<p class="text-xs text-slate-600 leading-relaxed">Dán link thủ công hoặc dùng nút upload ở trên. <strong>Mỗi dòng một URL</strong> (tối đa ' +
+      MAX_MEDIA_LINKS +
+      '); khi gửi báo cáo, các link này sẽ được ghi vào Google Sheet.</p>' +
+      '<textarea id="media_links_text" rows="4" class="w-full rounded-xl border border-slate-300 px-3 py-3 text-base font-mono text-sm" placeholder="https://…">' +
+      escapeHtml(state.media_links_text) +
+      '</textarea></div></div>'
     );
   }
 
@@ -1814,6 +2084,17 @@
         escapeHtml(state.extra_crop_detail.trim()) +
         '</div></div>';
     }
+    var mlinks = parseMediaLinkLines(state.media_links_text);
+    if (mlinks.length) {
+      html +=
+        '<div class="border-t border-slate-200 pt-3"><span class="text-slate-500">Link ảnh / video</span><p class="text-sm mt-1">' +
+        mlinks.length +
+        ' link — kiểm tra lại trước khi gửi.</p><ul class="list-disc list-inside text-xs text-slate-600 mt-2 space-y-1 break-all">';
+      mlinks.forEach(function (u) {
+        html += '<li>' + escapeHtml(u.length > 80 ? u.slice(0, 77) + '…' : u) + '</li>';
+      });
+      html += '</ul></div>';
+    }
     html += '</div>';
     return html;
   }
@@ -1953,6 +2234,31 @@
     if (extraDet) {
       extraDet.addEventListener('input', function () {
         state.extra_crop_detail = extraDet.value;
+      });
+    }
+    var mediaLinksTa = document.getElementById('media_links_text');
+    if (mediaLinksTa) {
+      mediaLinksTa.addEventListener('input', function () {
+        state.media_links_text = mediaLinksTa.value;
+      });
+    }
+
+    var mediaUp = document.getElementById('media_upload');
+    if (mediaUp) {
+      mediaUp.addEventListener('change', function () {
+        state.media_upload_error = '';
+        var files = Array.prototype.slice.call(mediaUp.files || []);
+        state.media_upload_files = files;
+        state.media_upload_jobs = files.map(function (f) {
+          return { name: f.name, size: f.size, status: 'pending', url: '', error: '' };
+        });
+        render();
+      });
+    }
+    var mediaUpBtn = document.getElementById('btn-media-upload');
+    if (mediaUpBtn) {
+      mediaUpBtn.addEventListener('click', function () {
+        startMediaUpload();
       });
     }
 

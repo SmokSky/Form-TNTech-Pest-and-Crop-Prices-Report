@@ -35,5 +35,5 @@ Tham chiếu mẫu: [assets/config.example.js](assets/config.example.js).
 | Đường dẫn | Mô tả |
 |-----------|--------|
 | `index.html` | Trang chính + Tailwind CDN |
-| `assets/app.js` | Luồng động: khu vực → **chọn nhóm cây** → ND nòng cốt → form chi tiết (năng suất; **giá / loại giá không bắt buộc**, mỗi dòng: loại giá và giá trên hai hàng riêng) → **Chi tiết bổ sung** → xác nhận; `report.version` = 8; `selected_groups`, `chi_tiet_bo_sung` |
+| `assets/app.js` | Luồng động: khu vực → **chọn nhóm cây** → ND nòng cốt → form chi tiết → **Chi tiết bổ sung** (ghi chú + **link ảnh/video**, mỗi dòng một URL) → xác nhận; `report.version` = 9; `selected_groups`, `chi_tiet_bo_sung`, `media_links` |
 | `assets/config.js` | URL Web App + token (điền sau deploy) |
